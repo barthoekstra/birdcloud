@@ -1,0 +1,22 @@
+language: python
+python:
+  - "3.5"
+  - "3.6"
+  - "3.6-dev"
+  - "3.7"
+  - "3.7-dev"
+before_install:
+    # Download miniconda and install dependencies
+    - export MINICONDA=$HOME/miniconda
+    - export PATH="$MINICONDA/bin:$PATH"
+    - hash -r
+    - wget http://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh -O miniconda.sh
+    - bash miniconda.sh -b -f -p $MINICONDA
+    - conda config --set always_yes yes
+    - conda update conda
+    - conda config --add channels conda-forge
+    - conda info -a
+    - conda create -q -n birdcloud-test python=$TRAVIS_PYTHON_VERSION coverage h5py wradlib numpy pytest scipy pandas
+    - source activate birdcloud-test
+script:
+  - py.test

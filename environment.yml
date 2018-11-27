@@ -1,0 +1,14 @@
+name: birdcloud
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - coverage
+  - h5py
+  - jupyter
+  - wradlib
+  - numpy
+  - pytest
+  - scipy
+  - pandas
+  - python=3.6.6
