@@ -51,7 +51,6 @@ class BirdCloud:
     def extract_knmi_scans(self, file):
         for group in file:
             if file[group].name in self.available_scans:
-                print(file[group].name)
                 scan = dict()
 
                 scan['elevation_angle'] = file[group].attrs.get('scan_elevation')[0]
@@ -60,7 +59,6 @@ class BirdCloud:
                 scan['bin_range'] = file[group].attrs.get('scan_range_bin')[0]
                 scan['n_range_bins_limit'] = self.calculate_bin_range_limit(self.range_limit, scan['bin_range'],
                                                                             scan['n_range_bins'])
-                print(scan)
                 site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude']]
 
                 scan['x'], scan['y'], scan['z'] = self.calculate_xyz(scan['elevation_angle'],
@@ -88,18 +86,14 @@ class BirdCloud:
                         formula = str(calibration_formula).split('*PV')
                         gain = float(formula[0][7:])
                         offset = float(formula[1][1:-2])
-                        print(offset)
 
                         corrected_data = raw_data * gain + offset  # @TODO: Also converts 0 values with offset, is this correct?
-                        print(corrected_data.shape)
                         scan[dataset_name] = corrected_data.flatten()
 
                     else:
                         raw_data = np.tile(raw_data, (scan['n_range_bins'], 1))
                         raw_data = np.transpose(raw_data)
-                        print(raw_data.shape)
-                        scan[
-                            dataset_name] = raw_data.flatten()  # @TODO: This data is multidimensional, so needs to be repeated for all distances
+                        scan[dataset_name] = raw_data.flatten()  # @TODO: This data is multidimensional, so needs to be repeated for all distances
 
                 df_scan = pd.DataFrame.from_dict(scan, orient='columns')
 
