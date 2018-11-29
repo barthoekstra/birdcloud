@@ -14,26 +14,39 @@ from datetime import datetime
 
 class BirdCloud:
 
-    def __init__(self, range_limit):
+    def __init__(self):
+        """
+        Prepares BirdCloud object
+
+        The object contains radar, product and projection metadata and a potentially range limited point cloud.
+        """
         self.source = None
         self.radar = dict()
         self.product = dict()
         self.pointcloud = pd.DataFrame()
-        self.range_limit = range_limit
+        self.range_limit = None
         self.projection = None
 
-    def from_raw_knmi_file(self, filepath):
-        start_time = time.time()
+    def from_raw_knmi_file(self, filepath, range_limit=None):
+        """
+        Builds point cloud from KNMI radar HDF5 file
 
+        :param filepath: path to the raw KNMI radar HDF5 file
+        :param range_limit: None or iterable containing both minimum and maximum range of the point cloud from the radar
+            site.
+        """
         f = h5py.File(filepath, 'r')
+        self.source = filepath
+        self.range_limit = range_limit
 
         self.parse_knmi_metadata(f)
         self.extract_knmi_scans(f)
 
-        print('Elapsed time: {}'.format(time.time() - start_time))
-
     def parse_knmi_metadata(self, file):
-        # Radar
+        """
+        Parses KNMI metadata from HDF5 file about the radar itself and the provided radar products
+        :param file: HDF5 file object
+        """
         self.radar['name'] = file['radar1'].attrs.get('radar_name').decode('UTF-8')
         latlon = file['radar1'].attrs.get('radar_location')
         self.radar['latitude'] = latlon[1]
@@ -41,7 +54,6 @@ class BirdCloud:
         self.radar['altitude'] = self.radar_metadata[self.radar['name']]['altitude']
         self.radar['polarization'] = self.radar_metadata[self.radar['name']]['polarization']
 
-        # Radar product
         dt_format = '%d-%b-%Y;%H:%M:%S.%f'
         dt_start = file['overview'].attrs.get('product_datetime_start').decode('UTF-8')
         dt_end = file['overview'].attrs.get('product_datetime_end').decode('UTF-8')
@@ -57,14 +69,14 @@ class BirdCloud:
                 scan['n_range_bins'] = file[group].attrs.get('scan_number_range')[0]
                 scan['n_azim_bins'] = file[group].attrs.get('scan_number_azim')[0]
                 scan['bin_range'] = file[group].attrs.get('scan_range_bin')[0]
-                scan['n_range_bins_limit'] = self.calculate_bin_range_limit(self.range_limit, scan['bin_range'],
-                                                                            scan['n_range_bins'])
-                site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude']]
+                site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
 
-                scan['x'], scan['y'], scan['z'] = self.calculate_xyz(scan['elevation_angle'],
-                                                                     scan['n_range_bins_limit'],
+                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, scan['bin_range'],
+                                                                               scan['n_range_bins'])
+
+                scan['x'], scan['y'], scan['z'] = self.calculate_xyz(site_coords, scan['elevation_angle'],
                                                                      scan['n_azim_bins'], scan['bin_range'],
-                                                                     site_coords, range_min=0)
+                                                                     bin_range_min, bin_range_max)
 
                 for dataset in file[group]:
                     if dataset == 'calibration':
@@ -73,14 +85,13 @@ class BirdCloud:
                     calibration_path = '/{}/calibration/'.format(group)
                     calibration_identifier = dataset.replace('scan', 'calibration').replace('data', 'formulas')
                     calibration_formula = file[calibration_path].attrs.get(calibration_identifier)
-
                     dataset_path = '/{}/{}'.format(group, dataset)
                     dataset_name = dataset.lstrip('scan_').rstrip('_data')
 
-                    if dataset_name in self.excluded_datasets['DualPol']:
+                    if dataset_name in self.excluded_datasets[self.radar['polarization']]:
                         continue
 
-                    raw_data = file[dataset_path].value[:, 0:scan['n_range_bins_limit']]
+                    raw_data = file[dataset_path].value[:, bin_range_min:bin_range_max]
 
                     if calibration_formula is not None:
                         formula = str(calibration_formula).split('*PV')
@@ -89,7 +100,6 @@ class BirdCloud:
 
                         corrected_data = raw_data * gain + offset  # @TODO: Also converts 0 values with offset, is this correct?
                         scan[dataset_name] = corrected_data.flatten()
-
                     else:
                         raw_data = np.tile(raw_data, (scan['n_range_bins'], 1))
                         raw_data = np.transpose(raw_data)
@@ -99,21 +109,58 @@ class BirdCloud:
 
                 self.pointcloud = self.pointcloud.append(df_scan)
 
-    def calculate_bin_range_limit(self, distance_limit, bin_range, n_range_bins):
-        bins = math.floor(distance_limit / bin_range)
-        if bins > n_range_bins:
-            return n_range_bins
-        else:
-            return bins
+    def calculate_bin_range_limits(self, range_limit, bin_range, n_range_bins):
+        """
+        Calculates range of bins to select for all to fall within provided range_limit.
 
-    def calculate_xyz(self, elevation_angle, n_range_bins, n_azim_bins, bin_range, sitecoords=None, range_min=None):
-        if range_min is None:
-            range_min = 0
+        If the lower limit is None, it will be converted to 0. If the upper limit is None, it will be converted to the
+        maximum value of the range, i.e. n_range_bins.
 
+        E.g. this function will return the 6th bin as bins_min if the minimum range limit is set to 5 (km) and the
+            bin_range is 0.900: 5/0.900 = 5.5555 -> 6
+
+        :param range_limit: iterable containing successively a minimum and maximum range
+        :param bin_range: range covered by a single bin in the same units as range_limit
+        :param n_range_bins: the number of range bins within a scan
+        :return: indexes for the first (bins_min) and last (bins_max) bins that fall within the given range_limit
+        """
+        if range_limit is None:
+            range_limit = [None, None]
+
+        minimum = range_limit[0] if range_limit[0] is not None else 0
+        maximum = range_limit[1] if range_limit[1] is not None else n_range_bins
+
+        bins_min = math.ceil(minimum / bin_range)
+        if bins_min > n_range_bins:
+            raise ValueError('Minimum range set too high: no datapoints remaining.')
+
+        bins_max = math.floor(maximum / bin_range)
+        if bins_max > n_range_bins:
+            bins_max = n_range_bins
+
+        return bins_min, bins_max
+
+    def calculate_xyz(self, sitecoords, elevation_angle, n_azim_bins, bin_range, bin_range_min, bin_range_max):
+        """
+        Calculates X, Y and Z coordinates for centers of all radar bins using wradlib and sets self.projection to the
+        corresponding georeferencing information.
+
+        :param sitecoords: iterable containing coordinates and altitude of radar site, in the order of: longitude,
+            latitude, altitude
+        :param elevation_angle: elevation angle of the radar scan
+        :param n_azim_bins: number of azimuthal bins of the radar scan (usually 360)
+        :param bin_range: range covered by every bin (usually in kilometers). Should be in the same units as the radar
+            altitude
+        :param bin_range_min: index of the first range bin to calculate X, Y and Z coordinates for
+        :param bin_range_max: index of the last range bin to calculate X, Y and Z coordinates for
+        :return: numpy arrays for the X, Y and Z coordinates
+        """
         if sitecoords is None:
             sitecoords = (0, 0)
 
-        range_max = range_min + n_range_bins * bin_range
+        n_range_bins = bin_range_max - bin_range_min
+        range_min = bin_range_min * bin_range
+        range_max = bin_range_max * bin_range
         ranges = np.linspace(range_min, range_max, n_range_bins)
         azimuths = np.arange(0, n_azim_bins)
 
@@ -127,6 +174,10 @@ class BirdCloud:
         return xyz[:, 0], xyz[:, 1], xyz[:, 2]
 
     def to_csv(self, file_path):
+        """
+        Exports the point cloud to a CSV file.
+        :param file_path: path to CSV file. If the file does not exist yet, it will be created.
+        """
         self.pointcloud.to_csv(file_path, index=False)
 
     radar_metadata = {
@@ -176,8 +227,8 @@ class BirdCloud:
 
 
 if __name__ == '__main__':
-    b = BirdCloud(50)
-    # b.from_raw_knmi_file('../data/raw/RAD_NL60_VOL_NA_201610020500.h5')
+    start_time = time.time()
+    b = BirdCloud()
     b.from_raw_knmi_file('../data/raw/RAD_NL62_VOL_NA_201802010000.h5')
-    # b.to_csv('../data/processed/RAD_NL60_VOL_NA_201610020500.csv')
-    # b.to_csv('../data/processed/RAD_NL62_VOL_NA_201802010000.csv')
+    b.to_csv('../data/processed/RAD_NL62_VOL_NA_201802010000.csv')
+    print('Elapsed time: {}'.format(time.time() - start_time))
