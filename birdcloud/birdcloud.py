@@ -61,6 +61,13 @@ class BirdCloud:
         self.product['datetime_end'] = datetime.strptime(dt_end, dt_format)
 
     def extract_knmi_scans(self, file):
+        """
+        Iterates over all scans and corresponding datasets in the KNMI HDF5 raw radar files and builds the point cloud
+
+        @TODO: Consider different implementations which do not require constant concatenation of new scans
+        @TODO: Calibration also converts 0 values with offsets, is that correct?
+        :param file: HDF5 file object
+        """
         for group in file:
             if file[group].name in self.available_scans:
                 scan = dict()
@@ -98,12 +105,12 @@ class BirdCloud:
                         gain = float(formula[0][7:])
                         offset = float(formula[1][1:-2])
 
-                        corrected_data = raw_data * gain + offset  # @TODO: Also converts 0 values with offset, is this correct?
+                        corrected_data = raw_data * gain + offset
                         scan[dataset_name] = corrected_data.flatten()
                     else:
                         raw_data = np.tile(raw_data, (scan['n_range_bins'], 1))
                         raw_data = np.transpose(raw_data)
-                        scan[dataset_name] = raw_data.flatten()  # @TODO: This data is multidimensional, so needs to be repeated for all distances
+                        scan[dataset_name] = raw_data.flatten()
 
                 df_scan = pd.DataFrame.from_dict(scan, orient='columns')
 
@@ -229,6 +236,6 @@ class BirdCloud:
 if __name__ == '__main__':
     start_time = time.time()
     b = BirdCloud()
-    b.from_raw_knmi_file('../data/raw/RAD_NL62_VOL_NA_201802010000.h5')
+    b.from_raw_knmi_file('../data/raw/RAD_NL62_VOL_NA_201802010000.h5', [5, 30])
     b.to_csv('../data/processed/RAD_NL62_VOL_NA_201802010000.csv')
     print('Elapsed time: {}'.format(time.time() - start_time))
