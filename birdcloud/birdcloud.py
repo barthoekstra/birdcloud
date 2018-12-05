@@ -62,27 +62,32 @@ class BirdCloud:
 
     def extract_knmi_scans(self, file):
         """
-        Iterates over all scans and corresponding datasets in the KNMI HDF5 raw radar files and builds the point cloud
+        Iterates over all scans and corresponding datasets in the KNMI HDF5 raw radar files and builds the point cloud.
+        Additionally, all missing data values are removed and differential reflectivity (ZDR) is calculated.
 
         @TODO: Consider different implementations which do not require constant concatenation of new scans
-        @TODO: Calibration also converts 0 values with offsets, is that correct?
         :param file: HDF5 file object
         """
         for group in file:
             if file[group].name in self.available_scans:
-                scan = dict()
 
-                scan['elevation_angle'] = file[group].attrs.get('scan_elevation')[0]
-                scan['n_range_bins'] = file[group].attrs.get('scan_number_range')[0]
-                scan['n_azim_bins'] = file[group].attrs.get('scan_number_azim')[0]
-                scan['bin_range'] = file[group].attrs.get('scan_range_bin')[0]
+                if file[group].name in self.excluded_scans:
+                    continue
+
+                scan = dict()
+                z_offset = None
+
+                elevation_angle = file[group].attrs.get('scan_elevation')[0]
+                n_range_bins = file[group].attrs.get('scan_number_range')[0]
+                n_azim_bins = file[group].attrs.get('scan_number_azim')[0]
+                bin_range = file[group].attrs.get('scan_range_bin')[0]
                 site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
 
-                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, scan['bin_range'],
-                                                                               scan['n_range_bins'])
+                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, bin_range,
+                                                                               n_range_bins)
 
-                scan['x'], scan['y'], scan['z'] = self.calculate_xyz(site_coords, scan['elevation_angle'],
-                                                                     scan['n_azim_bins'], scan['bin_range'],
+                scan['x'], scan['y'], scan['z'] = self.calculate_xyz(site_coords, elevation_angle,
+                                                                     n_azim_bins, bin_range,
                                                                      bin_range_min, bin_range_max)
 
                 for dataset in file[group]:
@@ -105,14 +110,24 @@ class BirdCloud:
                         gain = float(formula[0][7:])
                         offset = float(formula[1][1:-2])
 
+                        if dataset_name == 'Z':
+                            z_offset = offset
+
                         corrected_data = raw_data * gain + offset
                         scan[dataset_name] = corrected_data.flatten()
                     else:
-                        raw_data = np.tile(raw_data, (scan['n_range_bins'], 1))
+                        raw_data = np.tile(raw_data, (n_range_bins, 1))
                         raw_data = np.transpose(raw_data)
                         scan[dataset_name] = raw_data.flatten()
 
                 df_scan = pd.DataFrame.from_dict(scan, orient='columns')
+
+                """The missing data value is 0 (see calibration -> calibration_missing_data), but this gets converted
+                to a different value using the offset. Since we don't need empty points in the point cloud, we remove
+                all the records where the Z value is equal to the Z offset."""
+                df_scan = df_scan[df_scan['Z'] != z_offset]
+
+                df_scan['ZDR'] = df_scan['Z'] - df_scan['Zv']
 
                 self.pointcloud = self.pointcloud.append(df_scan)
 
@@ -196,6 +211,8 @@ class BirdCloud:
     available_scans = {'/scan1', '/scan2', '/scan3', '/scan4', '/scan5', '/scan6', '/scan7', '/scan8',
                        '/scan9', '/scan10', '/scan11', '/scan12', '/scan13', '/scan14', '/scan15', '/scan16'}
 
+    excluded_scans = {'/scan1', '/scan7', '/scan16'}
+
     available_datasets = {
         'SinglePol': {
             'uZ': 'Uncorrected reflectivity',
@@ -236,6 +253,6 @@ class BirdCloud:
 if __name__ == '__main__':
     start_time = time.time()
     b = BirdCloud()
-    b.from_raw_knmi_file('../data/raw/RAD_NL62_VOL_NA_201802010000.h5', [5, 30])
-    b.to_csv('../data/processed/RAD_NL62_VOL_NA_201802010000.csv')
+    b.from_raw_knmi_file('../data/raw/RAD_NL62_VOL_NA_201801010025.h5', [0, 50])
+    b.to_csv('../data/processed/RAD_NL62_VOL_NA_201801010025.csv')
     print('Elapsed time: {}'.format(time.time() - start_time))
