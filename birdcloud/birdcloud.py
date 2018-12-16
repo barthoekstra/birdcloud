@@ -106,9 +106,10 @@ class BirdCloud:
                     raw_data = file[dataset_path].value[:, bin_range_min:bin_range_max]
 
                     if calibration_formula is not None:
+                        calibration_formula = calibration_formula.decode('UTF-8')
                         formula = str(calibration_formula).split('*PV')
-                        gain = float(formula[0][7:])
-                        offset = float(formula[1][1:-2])
+                        gain = float(formula[0][4:])
+                        offset = float(formula[1][1:])
 
                         if dataset_name == 'Z':
                             z_offset = offset
