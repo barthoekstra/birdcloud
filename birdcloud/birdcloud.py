@@ -77,7 +77,7 @@ class BirdCloud:
                 scan = dict()
                 z_offset = None
 
-                elevation_angle = file[group].attrs.get('scan_elevation')[0]
+                scan['elevation_angle'] = file[group].attrs.get('scan_elevation')[0]
                 n_range_bins = file[group].attrs.get('scan_number_range')[0]
                 n_azim_bins = file[group].attrs.get('scan_number_azim')[0]
                 bin_range = file[group].attrs.get('scan_range_bin')[0]
@@ -86,9 +86,11 @@ class BirdCloud:
                 bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, bin_range,
                                                                                n_range_bins)
 
-                scan['x'], scan['y'], scan['z'] = self.calculate_xyz(site_coords, elevation_angle,
-                                                                     n_azim_bins, bin_range,
-                                                                     bin_range_min, bin_range_max)
+                scan['x'], scan['y'], scan['z'], scan['r'], scan['phi'] = self.calculate_xyz(site_coords,
+                                                                                             scan['elevation_angle'],
+                                                                                             n_azim_bins, bin_range,
+                                                                                             bin_range_min,
+                                                                                             bin_range_max)
 
                 for dataset in file[group]:
                     if dataset == 'calibration':
@@ -188,13 +190,15 @@ class BirdCloud:
         azimuths = np.arange(0, n_azim_bins)
 
         polargrid = np.meshgrid(ranges, azimuths)
+        r = polargrid[0].flatten()
+        phi = polargrid[1].flatten()
 
         xyz, self.projection = wradlib.georef.polar.spherical_to_xyz(polargrid[0], polargrid[1], elevation_angle,
                                                                      sitecoords)
 
         xyz = xyz.flatten().reshape(n_azim_bins * n_range_bins, 3)
 
-        return xyz[:, 0], xyz[:, 1], xyz[:, 2]
+        return xyz[:, 0], xyz[:, 1], xyz[:, 2], r, phi
 
     def to_csv(self, file_path):
         """
