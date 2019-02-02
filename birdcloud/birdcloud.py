@@ -220,32 +220,32 @@ class BirdCloud:
 
     available_datasets = {
         'SinglePol': {
-            'uZ': 'Uncorrected reflectivity',
-            'V': 'Radial velocity',
-            'Z': 'Reflectivity (corrected)',
-            'W': 'Spectral width of radial velocity',
-            'TX_power': 'Total reflectivity factor'
+            'uZ': {'description': 'Uncorrected reflectivity', 'ODIM': 'TH'},
+            'V': {'description': 'Radial velocity', 'ODIM': 'VRADH'},
+            'Z': {'description': 'Reflectivity (corrected)', 'ODIM': 'DBZH'},
+            'W': {'description': 'Spectral width of radial velocity', 'ODIM': 'WRADH'},
+            'TX_power': {'description': 'Total reflectivity factor', 'ODIM': None}
         },
         'DualPol': {
-            'CCOR': 'Clutter correction (horizontally polarized)',
-            'CCORv': 'Clutter correction (vertically polarized)',
-            'CPA': 'Clutter phase alignment (horizontally polarized)',
-            'CPAv': 'Clutter phase alignment (vertically polarized)',
-            'KDP': 'Specific differential phase',
-            'PhiDP': 'Differential phase',
-            'RhoHV': 'Correlation between Z(h) and Zv',
-            'SQI': 'Signal quality index (horizontally polarized)',
-            'SQIv': 'Signal quality index (vertically polarized)',
-            'TX_power': 'Total reflectivity factor',
-            'uPhiDP': 'Unsmoothed differential phase',
-            'uZ': 'Uncorrected reflectivity (horizontally polarized)',
-            'uZv': 'Uncorrected reflectivity (vertically polarized)',
-            'V': 'Radial velocity (horizontally polarized)',
-            'Vv': 'Radial velocity (vertically polarized)',
-            'W': 'Spectral width of radial velocity (horizontally polarized)',
-            'Wv': 'Spectral width of radial velocity (vertically polarized)',
-            'Z': 'Reflectivity (corrected, horizontally polarized)',
-            'Zv': 'Reflectivity (corrected, vertically polarized)'
+            'CCOR': {'description': 'Clutter correction (horizontally polarized)', 'ODIM': 'CCORH'},
+            'CCORv': {'description': 'Clutter correction (vertically polarized)', 'ODIM': 'CCORV'},
+            'CPA': {'description': 'Clutter phase alignment (horizontally polarized)', 'ODIM': 'CPAH'},
+            'CPAv': {'description': 'Clutter phase alignment (vertically polarized)', 'ODIM': 'CPAV'},
+            'KDP': {'description': 'Specific differential phase', 'ODIM': 'KDP'},
+            'PhiDP': {'description': 'Differential phase', 'ODIM': 'PHIDP'},
+            'RhoHV': {'description': 'Correlation between Z(h) and Zv', 'ODIM': 'RHOHV'},
+            'SQI': {'description': 'Signal quality index (horizontally polarized)', 'ODIM': 'SQIH'},
+            'SQIv': {'description': 'Signal quality index (vertically polarized)', 'ODIM': 'SQIV'},
+            'TX_power': {'description': 'Total reflectivity factor', 'ODIM': None},
+            'uPhiDP': {'description': 'Unsmoothed differential phase', 'ODIM': 'PHIDPU'},
+            'uZ': {'description': 'Uncorrected reflectivity (horizontally polarized)', 'ODIM': 'TH'},
+            'uZv': {'description': 'Uncorrected reflectivity (vertically polarized)', 'ODIM': 'TV'},
+            'V': {'description': 'Radial velocity (horizontally polarized)', 'ODIM': 'VRADH'},
+            'Vv': {'description': 'Radial velocity (vertically polarized)', 'ODIM': 'VRADV'},
+            'W': {'description': 'Spectral width of radial velocity (horizontally polarized)', 'ODIM': 'WRADH'},
+            'Wv': {'description': 'Spectral width of radial velocity (vertically polarized)', 'ODIM': 'WRADV'},
+            'Z': {'description': 'Reflectivity (corrected, horizontally polarized)', 'ODIM': 'DBZH'},
+            'Zv': {'description': 'Reflectivity (corrected, vertically polarized)', 'ODIM': 'DBZV'}
         }
     }
 
