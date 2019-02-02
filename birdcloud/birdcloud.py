@@ -41,6 +41,27 @@ class BirdCloud:
 
         self.parse_knmi_metadata(f)
         self.extract_knmi_scans(f)
+        self.calculate_additional_metrics()
+        self.drop_na_rows()
+        self.set_column_order()
+
+    def from_odim_file(self, filepath, range_limit=None):
+        """
+        Builds point cloud from ODIM formatted polar volume
+
+        :param filepath: path to the ODIM formatted HDF5 file
+        :param range_limit: None or iterable containing both minimum and maximum range of the point cloud from the radar
+            site.
+        """
+        f = h5py.File(filepath, 'r')
+        self.source = filepath
+        self.range_limit = range_limit
+
+        self.parse_odim_metadata(f)
+        self.extract_odim_scans(f)
+        self.calculate_additional_metrics()
+        self.drop_na_rows()
+        self.set_column_order()
 
     def parse_knmi_metadata(self, file):
         """
@@ -60,24 +81,48 @@ class BirdCloud:
         self.product['datetime_start'] = datetime.strptime(dt_start, dt_format)
         self.product['datetime_end'] = datetime.strptime(dt_end, dt_format)
 
+    def parse_odim_metadata(self, file):
+        """
+        Parses ODIM metadata from HDF5 file about radar itself and the provided radar products
+
+        Volume scan start and end times are derived from start time of the 1st scan and end time of the 16th scan, as
+        scans are numbered chronologically.
+
+        Note: Fetched values are converted to certain types to ensure consistency between KNMI and ODIM formatted radar
+            volume files. @TODO: Remove if unnecessary. (Probably is).
+        :param file: HDF5 file object
+        """
+        source = dict(pair.split(':') for pair in file['what'].attrs.get('source').decode('UTF-8').split(','))
+        self.radar['name'] = source['PLC']
+        self.radar['latitude'] = file['where'].attrs.get('lat')[0]
+        self.radar['longitude'] = file['where'].attrs.get('lon')[0]
+        self.radar['altitude'] = file['where'].attrs.get('height')[0]
+        self.radar['polarization'] = self.radar_metadata[self.radar['name']]['polarization']
+
+        time_start = datetime.strptime(file['dataset1']['what'].attrs.get('starttime').decode('UTF-8'), '%H%M%S').time()
+        date_start = datetime.strptime(file['dataset1']['what'].attrs.get('startdate').decode('UTF-8'), '%Y%m%d').date()
+        self.product['datetime_start'] = datetime.combine(date_start, time_start)
+        time_end = datetime.strptime(file['dataset16']['what'].attrs.get('endtime').decode('UTF-8'), '%H%M%S').time()
+        date_end = datetime.strptime(file['dataset16']['what'].attrs.get('enddate').decode('UTF-8'), '%Y%m%d').date()
+        self.product['datetime_end'] = datetime.combine(date_end, time_end)
+
     def extract_knmi_scans(self, file):
         """
         Iterates over all scans and corresponding datasets in the KNMI HDF5 raw radar files and builds the point cloud.
         Additionally, all missing data values are removed and differential reflectivity (ZDR) is calculated.
 
         @TODO: Consider different implementations which do not require constant concatenation of new scans
-        :param file: HDF5 file object
+        :param file: KNMI HDF5 file object
         """
         for group in file:
-            if file[group].name in self.available_scans:
+            if file[group].name.startswith('scan', 1):
 
                 if file[group].name in self.excluded_scans:
                     continue
 
                 scan = dict()
-                z_offset = None
 
-                scan['elevation_angle'] = file[group].attrs.get('scan_elevation')[0]
+                scan['elev'] = file[group].attrs.get('scan_elevation')[0]
                 n_range_bins = file[group].attrs.get('scan_number_range')[0]
                 n_azim_bins = file[group].attrs.get('scan_number_azim')[0]
                 bin_range = file[group].attrs.get('scan_range_bin')[0]
@@ -87,50 +132,100 @@ class BirdCloud:
                                                                                n_range_bins)
 
                 scan['x'], scan['y'], scan['z'], scan['r'], scan['phi'] = self.calculate_xyz(site_coords,
-                                                                                             scan['elevation_angle'],
+                                                                                             scan['elev'],
                                                                                              n_azim_bins, bin_range,
                                                                                              bin_range_min,
                                                                                              bin_range_max)
 
                 for dataset in file[group]:
-                    if dataset == 'calibration':
+                    if not dataset.startswith('scan_'):
                         continue
 
-                    calibration_path = '/{}/calibration/'.format(group)
-                    calibration_identifier = dataset.replace('scan', 'calibration').replace('data', 'formulas')
-                    calibration_formula = file[calibration_path].attrs.get(calibration_identifier)
-                    dataset_path = '/{}/{}'.format(group, dataset)
-                    dataset_name = dataset.lstrip('scan_').rstrip('_data')
+                    quantity = dataset.lstrip('scan_').rstrip('_data')
 
-                    if dataset_name in self.excluded_datasets[self.radar['polarization']]:
+                    if quantity in self.excluded_datasets[self.radar['polarization']]:
                         continue
 
-                    raw_data = file[dataset_path].value[:, bin_range_min:bin_range_max]
+                    calibration_identifier = 'calibration_{}_formulas'.format(quantity)
+                    calibration_formula = file[group]['calibration'].attrs.get(calibration_identifier).decode('UTF-8')
+                    gain, offset = calibration_formula.lstrip('GEO=').split('*PV+')
+                    gain = np.float64(gain)
+                    offset = np.float64(offset)
+                    nodata = file[group]['calibration'].attrs.get('calibration_missing_data')
+                    undetect = nodata
 
-                    if calibration_formula is not None:
-                        calibration_formula = calibration_formula.decode('UTF-8')
-                        formula = str(calibration_formula).split('*PV')
-                        gain = float(formula[0][4:])
-                        offset = float(formula[1][1:])
+                    raw_data = file[group][dataset].value[:, bin_range_min:bin_range_max]
+                    missing = np.logical_or(raw_data == nodata, raw_data == undetect)
 
-                        if dataset_name == 'Z':
-                            z_offset = offset
+                    corrected_data = raw_data * gain + offset
+                    corrected_data[missing] = np.nan
 
-                        corrected_data = raw_data * gain + offset
-                        scan[dataset_name] = corrected_data.flatten()
-                    else:
-                        raw_data = np.tile(raw_data, (n_range_bins, 1))
-                        raw_data = np.transpose(raw_data)
-                        scan[dataset_name] = raw_data.flatten()
+                    odim_quantity = self.available_datasets[self.radar['polarization']][quantity]['ODIM']
+
+                    scan[odim_quantity] = corrected_data.flatten()
 
                 df_scan = pd.DataFrame.from_dict(scan, orient='columns')
 
-                """The missing data value is 0 (see calibration -> calibration_missing_data), but this gets converted
-                to a different value using the offset. Since we don't need empty points in the point cloud, we remove
-                all the records where the Z value is equal to the Z offset."""
-                df_scan = df_scan[df_scan['Z'] != z_offset]
+                self.pointcloud = self.pointcloud.append(df_scan)
 
-                df_scan['ZDR'] = df_scan['Z'] - df_scan['Zv']
+    def extract_odim_scans(self, file):
+        """
+        Iterates over all scans and corresponding datasets in the ODIM formatted HDF5 files and builds the point cloud.
+        Additionally, all missing data values are removed and differential reflectivity (ZDR) is calculated.
+
+        Note: Units used in KNMIs raw file and ODIM files are different, so we convert meters to kilometers.
+
+        :param file: ODIM HDF5 file object
+        @TODO: Rename dataset in scan dictionary to consistent names (for KNMI and ODIM formatted files)
+        """
+        for group in file:
+            if file[group].name.startswith('dataset', 1):
+
+                if file[group].name in self.excluded_scans:
+                    continue
+
+                scan = dict()
+
+                scan['elev'] = file[group]['where'].attrs.get('elangle')[0]
+                n_range_bins = file[group]['where'].attrs.get('nbins')[0]
+                n_azim_bins = file[group]['where'].attrs.get('nrays')[0]
+                bin_range = file[group]['where'].attrs.get('rscale')[0] / 1000
+
+                # Units used in KNMIs raw file and ODIM files are different, so convert meters to kilometers
+                site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
+
+                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, bin_range,
+                                                                               n_range_bins)
+
+                scan['x'], scan['y'], scan['z'], scan['r'], scan['phi'] = self.calculate_xyz(site_coords,
+                                                                                             scan['elev'],
+                                                                                             n_azim_bins, bin_range,
+                                                                                             bin_range_min,
+                                                                                             bin_range_max)
+
+                for dataset in file[group]:
+                    if not dataset.startswith('data'):
+                        continue
+
+                    quantity = file[group][dataset]['what'].attrs.get('quantity').decode('UTF-8')
+
+                    if quantity in self.excluded_datasets[self.radar['polarization']]:
+                        continue
+
+                    gain = file[group][dataset]['what'].attrs.get('gain')[0]
+                    offset = file[group][dataset]['what'].attrs.get('offset')[0]
+                    nodata = file[group][dataset]['what'].attrs.get('nodata')[0]
+                    undetect = file[group][dataset]['what'].attrs.get('undetect')[0]
+
+                    raw_data = file[group][dataset]['data'].value[:, bin_range_min:bin_range_max]
+                    missing = np.logical_or(raw_data == nodata, raw_data == undetect)
+
+                    corrected_data = raw_data * gain + offset
+                    corrected_data[missing] = np.nan
+
+                    scan[quantity] = corrected_data.flatten()
+
+                df_scan = pd.DataFrame.from_dict(scan, orient='columns')
 
                 self.pointcloud = self.pointcloud.append(df_scan)
 
@@ -200,12 +295,45 @@ class BirdCloud:
 
         return xyz[:, 0], xyz[:, 1], xyz[:, 2], r, phi
 
+    def calculate_additional_metrics(self):
+        """
+        Triggers calculation of other metrics, such as ZDR calculation, textures etc.
+        """
+        self.calculate_differential_reflectivity()
+
+    def calculate_differential_reflectivity(self):
+        """
+        Calculates differential reflectivity or ZDR, defined as DBZH - DBZV (following Stepanian et al., 2016).
+        """
+        self.pointcloud['ZDR'] = self.pointcloud['DBZH'] - self.pointcloud['DBZV']
+
+    def drop_na_rows(self, subset=None):
+        """
+        Drops rows from the file where columns in subset containg NA/NaN values. By default this is done for rows that
+        contain no values for DBZH and VRADH.
+
+        :param subset: Iterable of column names that cannot have NA/NaN values in rows.
+        """
+        if subset is None:
+            subset = ['DBZH', 'VRADH']
+
+        self.pointcloud.dropna(subset=subset, inplace=True)
+
+    def set_column_order(self):
+        """
+        Orders columns in order defined in self.column_order for both single-pol and dual-pol polarizations.
+        """
+        order = self.column_order[self.radar['polarization']]
+        columns_unordered = list(self.pointcloud.columns)
+        columns_ordered = [variable for variable in order if variable in columns_unordered]
+        self.pointcloud = self.pointcloud[columns_ordered]
+
     def to_csv(self, file_path):
         """
         Exports the point cloud to a CSV file.
         :param file_path: path to CSV file. If the file does not exist yet, it will be created.
         """
-        self.pointcloud.to_csv(file_path, index=False)
+        self.pointcloud.to_csv(file_path, na_rep="NaN", quotechar='"', index=False)
 
     radar_metadata = {
         'DeBilt': {'altitude': 44, 'polarization': 'SinglePol'},
@@ -213,10 +341,7 @@ class BirdCloud:
         'Herwijnen': {'altitude': 27.7, 'polarization': 'DualPol'}
     }
 
-    available_scans = {'/scan1', '/scan2', '/scan3', '/scan4', '/scan5', '/scan6', '/scan7', '/scan8',
-                       '/scan9', '/scan10', '/scan11', '/scan12', '/scan13', '/scan14', '/scan15', '/scan16'}
-
-    excluded_scans = {'/scan1', '/scan7', '/scan16'}
+    excluded_scans = {'/scan1', '/scan7', '/scan16', '/dataset1', '/dataset7', '/dataset16'}
 
     available_datasets = {
         'SinglePol': {
@@ -250,14 +375,22 @@ class BirdCloud:
     }
 
     excluded_datasets = {
-        'SinglePol': {'CCOR', 'CCORv', 'CPA', 'CPAv', 'SQI', 'SQIv', 'TX_power'},
-        'DualPol': {'CCOR', 'CCORv', 'CPA', 'CPAv', 'SQI', 'SQIv', 'TX_power'},
+        'SinglePol': {'CCOR', 'CCORv', 'CPA', 'CPAv', 'SQI', 'SQIv', 'TX_power',  # KNMI HDF5
+                      'CCORH', 'CCORV', 'CPAH', 'CPAV', 'SQIH', 'SQIV'},  # ODIM HDF5
+        'DualPol': {'CCOR', 'CCORv', 'CPA', 'CPAv', 'SQI', 'SQIv', 'TX_power',  # KNMI HDF5
+                    'CCORH', 'CCORV', 'CPAH', 'CPAV', 'SQIH', 'SQIV'}  # ODIM HDF5
+    }
+
+    column_order = {
+        'SinglePol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
+        'DualPol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV', 'WRADH', 'WRADV',
+                    'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'CCORH', 'CCORV', 'CPAH', 'CPAV', 'SQIH', 'SQIV', 'TX_power']
     }
 
 
 if __name__ == '__main__':
     start_time = time.time()
     b = BirdCloud()
-    b.from_raw_knmi_file('../data/raw/RAD_NL62_VOL_NA_201801010025.h5', [0, 50])
-    b.to_csv('../data/processed/RAD_NL62_VOL_NA_201801010025.csv')
+    b.from_raw_knmi_file('../data/raw/KNMI.h5', [5, 25])
+    b.to_csv('../data/processed/KNMI.csv')
     print('Elapsed time: {}'.format(time.time() - start_time))
