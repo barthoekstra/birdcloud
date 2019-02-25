@@ -93,7 +93,7 @@ class BirdCloud:
         :param file: HDF5 file object
         """
         source = dict(pair.split(':') for pair in file['what'].attrs.get('source').decode('UTF-8').split(','))
-        self.radar['name'] = source['PLC']
+        self.radar['name'] = source['PLC'] if source.get('PLC') is not None else source.get('WMO')
         self.radar['latitude'] = file['where'].attrs.get('lat')[0]
         self.radar['longitude'] = file['where'].attrs.get('lon')[0]
         self.radar['altitude'] = file['where'].attrs.get('height')[0]
@@ -176,7 +176,6 @@ class BirdCloud:
         Note: Units used in KNMIs raw file and ODIM files are different, so we convert meters to kilometers.
 
         :param file: ODIM HDF5 file object
-        @TODO: Rename dataset in scan dictionary to consistent names (for KNMI and ODIM formatted files)
         """
         for group in file:
             if file[group].name.startswith('dataset', 1):
@@ -191,7 +190,6 @@ class BirdCloud:
                 n_azim_bins = file[group]['where'].attrs.get('nrays')[0]
                 bin_range = file[group]['where'].attrs.get('rscale')[0] / 1000
 
-                # Units used in KNMIs raw file and ODIM files are different, so convert meters to kilometers
                 site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
 
                 bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, bin_range,
@@ -384,13 +382,18 @@ class BirdCloud:
     column_order = {
         'SinglePol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
         'DualPol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV', 'WRADH', 'WRADV',
-                    'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'CCORH', 'CCORV', 'CPAH', 'CPAV', 'SQIH', 'SQIV', 'TX_power']
+                    'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'ZDR', 'CCORH', 'CCORV', 'CPAH', 'CPAV', 'SQIH', 'SQIV',
+                    'TX_power']
     }
 
 
 if __name__ == '__main__':
     start_time = time.time()
     b = BirdCloud()
-    b.from_raw_knmi_file('../data/raw/KNMI.h5', [5, 25])
-    b.to_csv('../data/processed/KNMI.csv')
+    #b.from_raw_knmi_file('../data/raw/KNMI.h5', [5, 25])
+    b.from_odim_file('../data/raw/RAD_NL61_VOL_NA_2005_ODIM.h5', [0, 100])
+    b.to_csv('../data/processed/RAD_NL61_VOL_NA_2005_ODIM.csv')
+    #b.from_odim_file('../data/raw/deemd_pvol_20170215T0000_10204.h5')
+    #b.to_csv('../data/processed/RAD_NL62_VOL_NA_201810282300.csv')
+    #b.to_csv('../data/processed/NEXRAD_EXAMPLE.h5')
     print('Elapsed time: {}'.format(time.time() - start_time))
