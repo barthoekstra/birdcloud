@@ -11,4 +11,5 @@ dependencies:
   - pytest
   - scipy
   - pandas
+  - docker-py
   - python=3.6.6

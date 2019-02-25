@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS vertical_profiles (
+date integer NOT NULL,
+time integer NOT NULL,
+height integer NOT NULL,
+u real,
+v real,
+w real,
+ff real,
+dd real,
+sd_vvp real,
+gap text,
+dbz real,
+eta real,
+dens real,
+DBZH real,
+n integer,
+n_dbz integer,
+n_all integer,
+n_dbz_all integer,
+PRIMARY KEY (date, time, height)
+)
