@@ -125,15 +125,16 @@ class BirdCloud:
                 scan['elev'] = file[group].attrs.get('scan_elevation')[0]
                 n_range_bins = file[group].attrs.get('scan_number_range')[0]
                 n_azim_bins = file[group].attrs.get('scan_number_azim')[0]
-                bin_range = file[group].attrs.get('scan_range_bin')[0]
+                scan['bin_range'] = file[group].attrs.get('scan_range_bin')[0]
                 site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
 
-                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, bin_range,
+                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, scan['bin_range'],
                                                                                n_range_bins)
 
                 scan['x'], scan['y'], scan['z'], scan['r'], scan['phi'] = self.calculate_xyz(site_coords,
                                                                                              scan['elev'],
-                                                                                             n_azim_bins, bin_range,
+                                                                                             n_azim_bins,
+                                                                                             scan['bin_range'],
                                                                                              bin_range_min,
                                                                                              bin_range_max)
 
@@ -188,16 +189,17 @@ class BirdCloud:
                 scan['elev'] = file[group]['where'].attrs.get('elangle')[0]
                 n_range_bins = file[group]['where'].attrs.get('nbins')[0]
                 n_azim_bins = file[group]['where'].attrs.get('nrays')[0]
-                bin_range = file[group]['where'].attrs.get('rscale')[0] / 1000
+                scan['bin_range'] = file[group]['where'].attrs.get('rscale')[0] / 1000
 
                 site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
 
-                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, bin_range,
+                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, scan['bin_range'],
                                                                                n_range_bins)
 
                 scan['x'], scan['y'], scan['z'], scan['r'], scan['phi'] = self.calculate_xyz(site_coords,
                                                                                              scan['elev'],
-                                                                                             n_azim_bins, bin_range,
+                                                                                             n_azim_bins,
+                                                                                             scan['bin_range'],
                                                                                              bin_range_min,
                                                                                              bin_range_max)
 
@@ -380,19 +382,19 @@ class BirdCloud:
     }
 
     column_order = {
-        'SinglePol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
-        'DualPol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV', 'WRADH', 'WRADV',
-                    'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'ZDR', 'CCORH', 'CCORV', 'CPAH', 'CPAV', 'SQIH', 'SQIV',
-                    'TX_power']
+        'SinglePol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'bin_range', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
+        'DualPol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'bin_range', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV',
+                    'WRADH', 'WRADV', 'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'ZDR', 'CCORH', 'CCORV', 'CPAH', 'CPAV',
+                    'SQIH', 'SQIV', 'TX_power']
     }
 
 
 if __name__ == '__main__':
     start_time = time.time()
     b = BirdCloud()
-    #b.from_raw_knmi_file('../data/raw/KNMI.h5', [5, 25])
-    b.from_odim_file('../data/raw/RAD_NL61_VOL_NA_2005_ODIM.h5', [0, 100])
-    b.to_csv('../data/processed/RAD_NL61_VOL_NA_2005_ODIM.csv')
+    b.from_raw_knmi_file('../data/test/RAD_NL62_VOL_NA_2005.h5', [5, 35])
+    #b.from_odim_file('../data/raw/RAD_NL61_VOL_NA_2005_ODIM.h5', [0, 100])
+    b.to_csv('../data/test/RAD_NL62_VOL_NA_2005.csv')
     #b.from_odim_file('../data/raw/deemd_pvol_20170215T0000_10204.h5')
     #b.to_csv('../data/processed/RAD_NL62_VOL_NA_201810282300.csv')
     #b.to_csv('../data/processed/NEXRAD_EXAMPLE.h5')
