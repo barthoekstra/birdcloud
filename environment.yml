@@ -6,10 +6,12 @@ dependencies:
   - coverage
   - h5py
   - jupyter
+  - jupyterlab
   - wradlib
   - numpy
   - pytest
   - scipy
   - pandas
   - docker-py
-  - python=3.6.6
+  - xarray
+  - python=3.7.2
