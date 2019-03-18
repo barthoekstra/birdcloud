@@ -35,7 +35,7 @@ from multiprocessing import Pool, cpu_count, current_process
 
 start_time = time.time()
 
-data_path = Path().cwd().parents[1] / 'data' / 'interim'
+data_path = Path().cwd().parents[1] / 'data' / 'interim' / '201708_ODIM'
 max_vol2bird_instances = 6 # Set to 1 if you want to disable parallellisation
 
 if max_vol2bird_instances > cpu_count():
@@ -91,16 +91,25 @@ connection.commit()
 
 
 def run_vol2bird(file):
+    vp_path = str(file)
+    vp_path = vp_path.replace('_ODIM.h5', '_ODIM.h5.vp.h5')
+
+    if Path(vp_path).is_file():
+        print('{} already exists.'.format(vp_path))
+        # Apparently vp file already exists, so we move to the next file
+        return
+
     sql_vp = ('INSERT INTO vertical_profiles ('
               'date, time, height, u, v, w, ff, dd, sd_vvp, gap, dbz, eta, dens, DBZH, n, n_dbz, n_all, n_dbz_all)'
               'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);')
 
     current_worker = int(current_process().name.split('-')[1]) - 1
 
-    connection = sqlite3.connect('vertical-profiles.db')
+    connection = sqlite3.connect('vertical-profiles.db', timeout=30)
     cursor = connection.cursor()
 
     try:
+
         cmd = 'bash -c "cd /data && vol2bird {} {}.vp.h5"'.format(file.name, file.name)
         out = containers[current_worker].exec_run(cmd, stdout=True, stderr=True).output.decode('utf-8')
 
@@ -112,10 +121,14 @@ def run_vol2bird(file):
             cursor.execute(sql_vp, data)
             connection.commit()
 
+        print(out)
         print('Finished file: {}'.format(file.name))
 
     except docker.errors.APIError as e:
         print('Docker error: {}'.format(e))
+
+    except sqlite3.ProgrammingError as e:
+        print('SQLite error: {}\n While processing file: {}'.format(e, file.name))
 
     cursor.close()
     connection.close()
