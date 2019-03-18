@@ -9,6 +9,7 @@ import numpy as np
 import time
 import wradlib
 import pandas as pd
+import xarray as xr
 from datetime import datetime
 
 
@@ -23,6 +24,7 @@ class BirdCloud:
         self.source = None
         self.radar = dict()
         self.product = dict()
+        self.scans = dict()
         self.pointcloud = pd.DataFrame()
         self.range_limit = None
         self.projection = None
@@ -42,6 +44,7 @@ class BirdCloud:
         self.parse_knmi_metadata(f)
         self.extract_knmi_scans(f)
         self.calculate_additional_metrics()
+        self.flatten_scans_to_pointcloud()
         self.drop_na_rows()
         self.set_column_order()
 
@@ -60,13 +63,14 @@ class BirdCloud:
         self.parse_odim_metadata(f)
         self.extract_odim_scans(f)
         self.calculate_additional_metrics()
+        self.flatten_scans_to_pointcloud()
         self.drop_na_rows()
         self.set_column_order()
 
     def parse_knmi_metadata(self, file):
         """
         Parses KNMI metadata from HDF5 file about the radar itself and the provided radar products
-        :param file: HDF5 file object
+        :param file: KNMI formatted HDF5 file object
         """
         self.radar['name'] = file['radar1'].attrs.get('radar_name').decode('UTF-8')
         latlon = file['radar1'].attrs.get('radar_location')
@@ -87,13 +91,10 @@ class BirdCloud:
 
         Volume scan start and end times are derived from start time of the 1st scan and end time of the 16th scan, as
         scans are numbered chronologically.
-
-        Note: Fetched values are converted to certain types to ensure consistency between KNMI and ODIM formatted radar
-            volume files. @TODO: Remove if unnecessary. (Probably is).
-        :param file: HDF5 file object
+        :param file: ODIM formatted HDF5 file object
         """
         source = dict(pair.split(':') for pair in file['what'].attrs.get('source').decode('UTF-8').split(','))
-        self.radar['name'] = source['PLC'] if source.get('PLC') is not None else source.get('WMO')
+        self.radar['name'] = source['PLC'].replace(" ", "") if source.get('PLC') is not None else source.get('WMO')
         self.radar['latitude'] = file['where'].attrs.get('lat')[0]
         self.radar['longitude'] = file['where'].attrs.get('lon')[0]
         self.radar['altitude'] = file['where'].attrs.get('height')[0]
@@ -108,126 +109,185 @@ class BirdCloud:
 
     def extract_knmi_scans(self, file):
         """
-        Iterates over all scans and corresponding datasets in the KNMI HDF5 raw radar files and builds the point cloud.
-        Additionally, all missing data values are removed and differential reflectivity (ZDR) is calculated.
+        Iterates over all scans and corresponding datasets in the KNMI formatted HDF5 files and stores all scans in
+        self.scans dictionary as Xarray Datasets, accessible by elevation keys.
 
-        @TODO: Consider different implementations which do not require constant concatenation of new scans
-        :param file: KNMI HDF5 file object
+        :param file: KNMI formatted HDF5 file object
         """
         for group in file:
-            if file[group].name.startswith('scan', 1):
+            if not file[group].name.startswith('scan', 1):
+                continue
 
-                if file[group].name in self.excluded_scans:
+            if file[group].name in self.excluded_scans:
+                continue
+
+            elevation = file[group].attrs.get('scan_elevation')[0]
+            n_range_bins = file[group].attrs.get('scan_number_range')[0]
+            n_azim_bins = file[group].attrs.get('scan_number_azim')[0]
+            bin_range = file[group].attrs.get('scan_range_bin')[0]
+            site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
+
+            bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, bin_range, n_range_bins)
+
+            x, y, z, ranges, azimuths = self.calculate_xyz(site_coords, elevation, n_azim_bins,
+                                                           bin_range, bin_range_min, bin_range_max)
+
+            datasets = {}
+
+            for dataset in file[group]:
+                try:
+                    ds, quantity = self.parse_knmi_dataset(file[group][dataset], bin_range_min, bin_range_max,
+                                                           ranges, azimuths)
+
+                    datasets[quantity] = ds
+
+                except TypeError:
                     continue
 
-                scan = dict()
+            dataset = xr.Dataset(data_vars=datasets,
+                                 coords={'azimuth': azimuths,
+                                         'range': ranges,
+                                         'x': (['azimuth', 'range'], x),
+                                         'y': (['azimuth', 'range'], y),
+                                         'z': (['azimuth', 'range'], z)},
+                                 attrs={'elevation': elevation,
+                                        'n_range_bins': n_range_bins,
+                                        'n_azim_bins': n_azim_bins,
+                                        'bin_range': bin_range,})
 
-                scan['elev'] = file[group].attrs.get('scan_elevation')[0]
-                n_range_bins = file[group].attrs.get('scan_number_range')[0]
-                n_azim_bins = file[group].attrs.get('scan_number_azim')[0]
-                scan['bin_range'] = file[group].attrs.get('scan_range_bin')[0]
-                site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
+            self.scans[elevation] = dataset
 
-                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, scan['bin_range'],
-                                                                               n_range_bins)
+    def parse_knmi_dataset(self, dataset, bin_range_min, bin_range_max, ranges, azimuths):
+        """
+        Parses a single dataset within a scan by converting it using the calibration formula and storing it as an
+        Xarray DataArray.
 
-                scan['x'], scan['y'], scan['z'], scan['r'], scan['phi'] = self.calculate_xyz(site_coords,
-                                                                                             scan['elev'],
-                                                                                             n_azim_bins,
-                                                                                             scan['bin_range'],
-                                                                                             bin_range_min,
-                                                                                             bin_range_max)
+        All missing data is marked as np.nan.
 
-                for dataset in file[group]:
-                    if not dataset.startswith('scan_'):
-                        continue
+        :param dataset: KNMI HDF5 file object with path to a radar dataset
+        :param bin_range_min: the index of the first bin that falls within the instance range_limit
+        :param bin_range_max: the index of the last bin that falls within the instance range_limit
+        :param ranges: grid of range values corresponding to each of the cells in the dataset array
+        :param azimuths: grid of azimuth values corresponding to each of the cells in the dataset array
+        :return: converted KNMI dataset as Xarray DataArray and corresponding ODIM compatible product (quantity) name
+        """
+        dataset_name = dataset.name.replace(dataset.parent.name + '/', '')
 
-                    quantity = dataset.lstrip('scan_').rstrip('_data')
+        if not dataset_name.startswith('scan_'):
+            return None
 
-                    if quantity in self.excluded_datasets[self.radar['polarization']]:
-                        continue
+        quantity = dataset_name.lstrip('scan_').rstrip('_data')
+        odim_quantity = self.available_datasets[self.radar['polarization']][quantity]['ODIM']
 
-                    calibration_identifier = 'calibration_{}_formulas'.format(quantity)
-                    calibration_formula = file[group]['calibration'].attrs.get(calibration_identifier).decode('UTF-8')
-                    gain, offset = calibration_formula.lstrip('GEO=').split('*PV+')
-                    gain = np.float64(gain)
-                    offset = np.float64(offset)
-                    nodata = file[group]['calibration'].attrs.get('calibration_missing_data')
-                    undetect = nodata
+        if quantity in self.excluded_datasets[self.radar['polarization']]:
+            return None
 
-                    raw_data = file[group][dataset].value[:, bin_range_min:bin_range_max]
-                    missing = np.logical_or(raw_data == nodata, raw_data == undetect)
+        calibration_identifier = 'calibration_{}_formulas'.format(quantity)
+        calibration_formula = dataset.parent['calibration'].attrs.get(calibration_identifier).decode('UTF-8')
+        gain, offset = calibration_formula.lstrip('GEO=').split('*PV+')
+        gain = np.float64(gain)
+        offset = np.float64(offset)
+        nodata = dataset.parent['calibration'].attrs.get('calibration_missing_data')
+        undetect = nodata
 
-                    corrected_data = raw_data * gain + offset
-                    corrected_data[missing] = np.nan
+        raw_data = dataset[:, bin_range_min:bin_range_max]
+        missing = np.logical_or(raw_data == nodata, raw_data == undetect)
 
-                    odim_quantity = self.available_datasets[self.radar['polarization']][quantity]['ODIM']
+        corrected_data = raw_data * gain + offset
+        corrected_data[missing] = np.nan
 
-                    scan[odim_quantity] = corrected_data.flatten()
+        ds = xr.DataArray(corrected_data, coords=[azimuths, ranges], dims=['azimuth', 'range'])
 
-                df_scan = pd.DataFrame.from_dict(scan, orient='columns')
-
-                self.pointcloud = self.pointcloud.append(df_scan)
+        return ds, odim_quantity
 
     def extract_odim_scans(self, file):
         """
-        Iterates over all scans and corresponding datasets in the ODIM formatted HDF5 files and builds the point cloud.
-        Additionally, all missing data values are removed and differential reflectivity (ZDR) is calculated.
+        Iterates over all scans and corresponding datasets in the ODIM formatted HDF5 files and stores all scans in
+        self.scans dictionary as Xarray Datasets, accessible by elevation keys.
 
-        Note: Units used in KNMIs raw file and ODIM files are different, so we convert meters to kilometers.
-
-        :param file: ODIM HDF5 file object
+        :param file: ODIM formatted HDF5 file object
         """
         for group in file:
-            if file[group].name.startswith('dataset', 1):
+            if not file[group].name.startswith('dataset', 1):
+                continue
 
-                if file[group].name in self.excluded_scans:
+            if file[group].name in self.excluded_scans:
+                continue
+
+            elevation = file[group]['where'].attrs.get('elangle')[0]
+            n_range_bins = file[group]['where'].attrs.get('nbins')[0]
+            n_azim_bins = file[group]['where'].attrs.get('nrays')[0]
+            bin_range = file[group]['where'].attrs.get('rscale')[0] / 1000
+            site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
+
+            bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, bin_range, n_range_bins)
+
+            x, y, z, ranges, azimuths = self.calculate_xyz(site_coords, elevation, n_azim_bins,
+                                                           bin_range, bin_range_min, bin_range_max)
+
+            datasets = {}
+
+            for dataset in file[group]:
+                try:
+                    ds, quantity = self.parse_odim_dataset(file[group][dataset], bin_range_min, bin_range_max,
+                                                           ranges, azimuths)
+
+                    datasets[quantity] = ds
+
+                except TypeError:
                     continue
 
-                scan = dict()
+            dataset = xr.Dataset(data_vars=datasets,
+                                 coords={'azimuth': azimuths,
+                                         'range': ranges,
+                                         'x': (['azimuth', 'range'], x),
+                                         'y': (['azimuth', 'range'], y),
+                                         'z': (['azimuth', 'range'], z)},
+                                 attrs={'elevation': elevation,
+                                        'n_range_bins': n_range_bins,
+                                        'n_azim_bins': n_azim_bins,
+                                        'bin_range': bin_range})
 
-                scan['elev'] = file[group]['where'].attrs.get('elangle')[0]
-                n_range_bins = file[group]['where'].attrs.get('nbins')[0]
-                n_azim_bins = file[group]['where'].attrs.get('nrays')[0]
-                scan['bin_range'] = file[group]['where'].attrs.get('rscale')[0] / 1000
+            self.scans[elevation] = dataset
 
-                site_coords = [self.radar['longitude'], self.radar['latitude'], self.radar['altitude'] / 1000]
+    def parse_odim_dataset(self, dataset, bin_range_min, bin_range_max, ranges, azimuths):
+        """
+        Parses a single dataset within a scan by converting it using the calibration formula and storing it as an
+        Xarray DataArray.
 
-                bin_range_min, bin_range_max = self.calculate_bin_range_limits(self.range_limit, scan['bin_range'],
-                                                                               n_range_bins)
+        All missing data is marked as np.nan.
 
-                scan['x'], scan['y'], scan['z'], scan['r'], scan['phi'] = self.calculate_xyz(site_coords,
-                                                                                             scan['elev'],
-                                                                                             n_azim_bins,
-                                                                                             scan['bin_range'],
-                                                                                             bin_range_min,
-                                                                                             bin_range_max)
+        :param dataset: ODIM HDF5 file object with path to a radar dataset
+        :param bin_range_min: the index of the first bin that falls within the instance range_limit
+        :param bin_range_max: the index of the last bin that falls within the instance range_limit
+        :param ranges: grid of range values corresponding to each of the cells in the dataset array
+        :param azimuths: grid of azimuth values corresponding to each of the cells in the dataset array
+        :return: converted ODIM dataset as Xarray DataArray and corresponding product (quantity) name
+        """
+        dataset_name = dataset.name.replace(dataset.parent.name + '/', '')
 
-                for dataset in file[group]:
-                    if not dataset.startswith('data'):
-                        continue
+        if not dataset_name.startswith('data'):
+            return None
 
-                    quantity = file[group][dataset]['what'].attrs.get('quantity').decode('UTF-8')
+        quantity = dataset['what'].attrs.get('quantity').decode('UTF-8')
 
-                    if quantity in self.excluded_datasets[self.radar['polarization']]:
-                        continue
+        if quantity in self.excluded_datasets[self.radar['polarization']]:
+            return None
 
-                    gain = file[group][dataset]['what'].attrs.get('gain')[0]
-                    offset = file[group][dataset]['what'].attrs.get('offset')[0]
-                    nodata = file[group][dataset]['what'].attrs.get('nodata')[0]
-                    undetect = file[group][dataset]['what'].attrs.get('undetect')[0]
+        gain = dataset['what'].attrs.get('gain')[0]
+        offset = dataset['what'].attrs.get('offset')[0]
+        nodata = dataset['what'].attrs.get('nodata')[0]
+        undetect = dataset['what'].attrs.get('undetect')[0]
 
-                    raw_data = file[group][dataset]['data'].value[:, bin_range_min:bin_range_max]
-                    missing = np.logical_or(raw_data == nodata, raw_data == undetect)
+        raw_data = dataset['data'][:, bin_range_min:bin_range_max]
+        missing = np.logical_or(raw_data == nodata, raw_data == undetect)
 
-                    corrected_data = raw_data * gain + offset
-                    corrected_data[missing] = np.nan
+        corrected_data = raw_data * gain + offset
+        corrected_data[missing] = np.nan
 
-                    scan[quantity] = corrected_data.flatten()
+        ds = xr.DataArray(corrected_data, coords=[azimuths, ranges], dims=['azimuth', 'range'])
 
-                df_scan = pd.DataFrame.from_dict(scan, orient='columns')
-
-                self.pointcloud = self.pointcloud.append(df_scan)
+        return ds, quantity
 
     def calculate_bin_range_limits(self, range_limit, bin_range, n_range_bins):
         """
@@ -273,7 +333,7 @@ class BirdCloud:
             altitude
         :param bin_range_min: index of the first range bin to calculate X, Y and Z coordinates for
         :param bin_range_max: index of the last range bin to calculate X, Y and Z coordinates for
-        :return: numpy arrays for the X, Y and Z coordinates
+        :return: numpy arrays for the X, Y and Z coordinates and ranges and azimuths
         """
         if sitecoords is None:
             sitecoords = (0, 0)
@@ -285,15 +345,11 @@ class BirdCloud:
         azimuths = np.arange(0, n_azim_bins)
 
         polargrid = np.meshgrid(ranges, azimuths)
-        r = polargrid[0].flatten()
-        phi = polargrid[1].flatten()
 
         xyz, self.projection = wradlib.georef.polar.spherical_to_xyz(polargrid[0], polargrid[1], elevation_angle,
                                                                      sitecoords)
 
-        xyz = xyz.flatten().reshape(n_azim_bins * n_range_bins, 3)
-
-        return xyz[:, 0], xyz[:, 1], xyz[:, 2], r, phi
+        return xyz[:, :, 0], xyz[:, :, 1], xyz[:, :, 2], ranges, azimuths
 
     def calculate_additional_metrics(self):
         """
@@ -305,7 +361,16 @@ class BirdCloud:
         """
         Calculates differential reflectivity or ZDR, defined as DBZH - DBZV (following Stepanian et al., 2016).
         """
-        self.pointcloud['ZDR'] = self.pointcloud['DBZH'] - self.pointcloud['DBZV']
+        for elevation in self.scans:
+            self.scans[elevation]['ZDR'] = self.scans[elevation]['DBZH'] - self.scans[elevation]['DBZV']
+
+    def flatten_scans_to_pointcloud(self):
+        """
+        The function that 'builds' the pointcloud by flattening the self.scans dictionary into a single Pandas dataframe
+        self.pointcloud. This is a necessary step to e.g. save the pointcloud in a CSV file for viewing in CloudCompare.
+        """
+        for elevation in self.scans:
+            self.pointcloud = self.pointcloud.append(self.scans[elevation].to_dataframe())
 
     def drop_na_rows(self, subset=None):
         """
@@ -337,7 +402,7 @@ class BirdCloud:
 
     radar_metadata = {
         'DeBilt': {'altitude': 44, 'polarization': 'SinglePol'},
-        'Den Helder': {'altitude': 51, 'polarization': 'DualPol'},
+        'DenHelder': {'altitude': 51, 'polarization': 'DualPol'},
         'Herwijnen': {'altitude': 27.7, 'polarization': 'DualPol'}
     }
 
@@ -382,20 +447,21 @@ class BirdCloud:
     }
 
     column_order = {
-        'SinglePol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'bin_range', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
-        'DualPol': ['x', 'y', 'z', 'elev', 'r', 'phi', 'bin_range', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV',
-                    'WRADH', 'WRADV', 'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'ZDR', 'CCORH', 'CCORV', 'CPAH', 'CPAV',
-                    'SQIH', 'SQIV', 'TX_power']
+        'SinglePol': ['x', 'y', 'z', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
+        'DualPol': ['x', 'y', 'z', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV', 'WRADH', 'WRADV', 'PHIDP', 'PHIDPU',
+                    'RHOHV', 'KDP', 'ZDR', 'CCORH', 'CCORV', 'CPAH', 'CPAV', 'SQIH', 'SQIV', 'TX_power']
     }
 
 
 if __name__ == '__main__':
     start_time = time.time()
+
     b = BirdCloud()
-    b.from_raw_knmi_file('../data/test/RAD_NL62_VOL_NA_2005.h5', [5, 35])
-    #b.from_odim_file('../data/raw/RAD_NL61_VOL_NA_2005_ODIM.h5', [0, 100])
-    b.to_csv('../data/test/RAD_NL62_VOL_NA_2005.csv')
-    #b.from_odim_file('../data/raw/deemd_pvol_20170215T0000_10204.h5')
-    #b.to_csv('../data/processed/RAD_NL62_VOL_NA_201810282300.csv')
-    #b.to_csv('../data/processed/NEXRAD_EXAMPLE.h5')
+    b.from_odim_file('../data/test/RAD_NL61_VOL_NA_2330_ODIM.h5')
+    b.to_csv('../data/test/RAD_NL61_VOL_NA_2330_ODIM.csv')
+
+    c = BirdCloud()
+    c.from_raw_knmi_file('../data/test/RAD_NL61_VOL_NA_2330.h5')
+    c.to_csv('../data/test/RAD_NL61_VOL_NA_2330.csv')
+
     print('Elapsed time: {}'.format(time.time() - start_time))
