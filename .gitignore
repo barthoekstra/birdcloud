@@ -211,3 +211,4 @@ fabric.properties
 ##############################
 data/
 scratch/
+*.db
