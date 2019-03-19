@@ -3,14 +3,14 @@ description: Bird point cloud builder
 author: Bart Hoekstra
 """
 import math
+import time
+from datetime import datetime
 
 import h5py
 import numpy as np
-import time
-import wradlib
 import pandas as pd
+import wradlib
 import xarray as xr
-from datetime import datetime
 
 
 class BirdCloud:
@@ -154,7 +154,7 @@ class BirdCloud:
                                  attrs={'elevation': elevation,
                                         'n_range_bins': n_range_bins,
                                         'n_azim_bins': n_azim_bins,
-                                        'bin_range': bin_range,})
+                                        'bin_range': bin_range, })
 
             self.scans[str(elevation)] = dataset
             self._elevations.append(elevation)
