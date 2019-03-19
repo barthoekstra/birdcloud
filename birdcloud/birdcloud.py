@@ -122,7 +122,7 @@ class BirdCloud:
             if file[group].name in self.excluded_scans:
                 continue
 
-            elevation = file[group].attrs.get('scan_elevation')[0]
+            elevation = round(file[group].attrs.get('scan_elevation')[0], 1)
             n_range_bins = file[group].attrs.get('scan_number_range')[0]
             n_azim_bins = file[group].attrs.get('scan_number_azim')[0]
             bin_range = file[group].attrs.get('scan_range_bin')[0]
@@ -156,7 +156,7 @@ class BirdCloud:
                                         'n_azim_bins': n_azim_bins,
                                         'bin_range': bin_range,})
 
-            self.scans[elevation] = dataset
+            self.scans[str(elevation)] = dataset
             self._elevations.append(elevation)
 
     def parse_knmi_dataset(self, dataset, bin_range_min, bin_range_max, ranges, azimuths):
@@ -216,7 +216,7 @@ class BirdCloud:
             if file[group].name in self.excluded_scans:
                 continue
 
-            elevation = file[group]['where'].attrs.get('elangle')[0]
+            elevation = round(file[group]['where'].attrs.get('elangle')[0], 1)
             n_range_bins = file[group]['where'].attrs.get('nbins')[0]
             n_azim_bins = file[group]['where'].attrs.get('nrays')[0]
             bin_range = file[group]['where'].attrs.get('rscale')[0] / 1000
@@ -250,7 +250,7 @@ class BirdCloud:
                                         'n_azim_bins': n_azim_bins,
                                         'bin_range': bin_range})
 
-            self.scans[elevation] = dataset
+            self.scans[str(elevation)] = dataset
             self._elevations.append(elevation)
 
     def parse_odim_dataset(self, dataset, bin_range_min, bin_range_max, ranges, azimuths):
