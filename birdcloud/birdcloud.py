@@ -28,6 +28,7 @@ class BirdCloud:
         self.pointcloud = pd.DataFrame()
         self.range_limit = None
         self.projection = None
+        self._elevations = []
 
     def from_raw_knmi_file(self, filepath, range_limit=None):
         """
@@ -156,6 +157,7 @@ class BirdCloud:
                                         'bin_range': bin_range,})
 
             self.scans[elevation] = dataset
+            self._elevations.append(elevation)
 
     def parse_knmi_dataset(self, dataset, bin_range_min, bin_range_max, ranges, azimuths):
         """
@@ -249,6 +251,7 @@ class BirdCloud:
                                         'bin_range': bin_range})
 
             self.scans[elevation] = dataset
+            self._elevations.append(elevation)
 
     def parse_odim_dataset(self, dataset, bin_range_min, bin_range_max, ranges, azimuths):
         """
@@ -399,6 +402,14 @@ class BirdCloud:
         :param file_path: path to CSV file. If the file does not exist yet, it will be created.
         """
         self.pointcloud.to_csv(file_path, na_rep="NaN", quotechar='"', index=False)
+
+    @property
+    def elevations(self):
+        return sorted(self._elevations)
+
+    @elevations.setter
+    def elevations(self, value):
+        self._elevations.append(value)
 
     radar_metadata = {
         'DeBilt': {'altitude': 44, 'polarization': 'SinglePol'},
