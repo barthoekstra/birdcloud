@@ -25,7 +25,7 @@ class BirdCloud:
         self.radar = dict()
         self.product = dict()
         self.scans = dict()
-        self.pointcloud = pd.DataFrame()
+        self.pointcloud = None
         self.range_limit = None
         self.projection = None
         self._elevations = []
@@ -373,7 +373,14 @@ class BirdCloud:
         self.pointcloud. This is a necessary step to e.g. save the pointcloud in a CSV file for viewing in CloudCompare.
         """
         for elevation in self.scans:
-            self.pointcloud = self.pointcloud.append(self.scans[elevation].to_dataframe())
+            dataframe = self.scans[elevation].to_dataframe()
+            dataframe['elevation'] = elevation
+            dataframe.reset_index(inplace=True)
+
+            if isinstance(self.pointcloud, pd.DataFrame):
+                self.pointcloud = self.pointcloud.append(dataframe)
+            else:
+                self.pointcloud = dataframe
 
     def drop_na_rows(self, subset=None):
         """
@@ -395,6 +402,7 @@ class BirdCloud:
         columns_unordered = list(self.pointcloud.columns)
         columns_ordered = [variable for variable in order if variable in columns_unordered]
         self.pointcloud = self.pointcloud[columns_ordered]
+        self.pointcloud.set_index(['elevation', 'azimuth', 'range'], inplace=True)
 
     def to_csv(self, file_path):
         """
@@ -458,9 +466,10 @@ class BirdCloud:
     }
 
     column_order = {
-        'SinglePol': ['x', 'y', 'z', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
-        'DualPol': ['x', 'y', 'z', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV', 'WRADH', 'WRADV', 'PHIDP', 'PHIDPU',
-                    'RHOHV', 'KDP', 'ZDR', 'CCORH', 'CCORV', 'CPAH', 'CPAV', 'SQIH', 'SQIV', 'TX_power']
+        'SinglePol': ['elevation', 'azimuth', 'range', 'x', 'y', 'z', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
+        'DualPol': ['elevation', 'azimuth', 'range', 'x', 'y', 'z', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV',
+                    'WRADH', 'WRADV', 'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'ZDR', 'CCORH', 'CCORV', 'CPAH', 'CPAV',
+                    'SQIH', 'SQIV', 'TX_power']
     }
 
 
