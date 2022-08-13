@@ -477,11 +477,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     b = BirdCloud()
-    b.from_odim_file('../data/test/RAD_NL61_VOL_NA_2330_ODIM.h5')
-    b.to_csv('../data/test/RAD_NL61_VOL_NA_2330_ODIM.csv')
-
-    c = BirdCloud()
-    c.from_raw_knmi_file('../data/test/RAD_NL61_VOL_NA_2330.h5')
-    c.to_csv('../data/test/RAD_NL61_VOL_NA_2330.csv')
+    b.from_raw_knmi_file('../tests/test_data/RAD_NL62_VOL_NA_201802010000.h5')
+    b.to_csv('../RAD_NL62_VOL_NA_201802010000.csv')
 
     print('Elapsed time: {}'.format(time.time() - start_time))
