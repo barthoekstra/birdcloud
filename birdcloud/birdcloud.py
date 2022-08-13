@@ -154,7 +154,7 @@ class BirdCloud:
                                  attrs={'elevation': elevation,
                                         'n_range_bins': n_range_bins,
                                         'n_azim_bins': n_azim_bins,
-                                        'bin_range': bin_range, })
+                                        'bin_range': bin_range,})
 
             self.scans[str(elevation)] = dataset
             self._elevations.append(elevation)
@@ -350,7 +350,7 @@ class BirdCloud:
         polargrid = np.meshgrid(ranges, azimuths)
 
         xyz, self.projection = wradlib.georef.polar.spherical_to_xyz(polargrid[0], polargrid[1], elevation_angle,
-                                                                     sitecoords)
+                                                                     sitecoords, re=6378000, squeeze=True)
 
         return xyz[:, :, 0], xyz[:, :, 1], xyz[:, :, 2], ranges, azimuths
 
