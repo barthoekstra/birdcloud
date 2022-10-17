@@ -30,7 +30,7 @@ class BirdCloud:
         self.projection = None
         self._elevations = []
 
-    def from_raw_knmi_file(self, filepath, range_limit=None):
+    def from_raw_knmi_file(self, filepath, range_limit=None, dr_thresh=-12):
         """
         Builds point cloud from KNMI radar HDF5 file
 
@@ -45,17 +45,20 @@ class BirdCloud:
         self.parse_knmi_metadata(f)
         self.extract_knmi_scans(f)
         self.calculate_additional_metrics()
+        self.label_biology_using_depolarization_ratio(thresh=dr_thresh)
         self.flatten_scans_to_pointcloud()
         self.drop_na_rows()
         self.set_column_order()
 
-    def from_odim_file(self, filepath, range_limit=None):
+    def from_odim_file(self, filepath, range_limit=None, dr_thresh=-12):
         """
         Builds point cloud from ODIM formatted polar volume
 
         :param filepath: path to the ODIM formatted HDF5 file
         :param range_limit: None or iterable containing both minimum and maximum range of the point cloud from the radar
             site.
+        :param dr_thresh: Threshold of depolarization ratio to label biology and meteorology. Values above this
+            threshold will be labeled as biology.
         """
         f = h5py.File(filepath, 'r')
         self.source = filepath
@@ -64,6 +67,7 @@ class BirdCloud:
         self.parse_odim_metadata(f)
         self.extract_odim_scans(f)
         self.calculate_additional_metrics()
+        self.label_biology_using_depolarization_ratio(thresh=dr_thresh)
         self.flatten_scans_to_pointcloud()
         self.drop_na_rows()
         self.set_column_order()
@@ -359,6 +363,7 @@ class BirdCloud:
         Triggers calculation of other metrics, such as ZDR calculation, textures etc.
         """
         self.calculate_differential_reflectivity()
+        self.calculate_depolarization_ratio()
 
     def calculate_differential_reflectivity(self):
         """
@@ -366,6 +371,24 @@ class BirdCloud:
         """
         for elevation in self.scans:
             self.scans[elevation]['ZDR'] = self.scans[elevation]['DBZH'] - self.scans[elevation]['DBZV']
+
+    def calculate_depolarization_ratio(self):
+        """
+        Calculated depolarization ratio following Kilambi et al. (2018).
+
+        DR = 10 * log10((ZDR + 1 - 2 * ZDR^0.5 * RHOHV) / (ZDR + 1 + 2 * ZDR^0.5 * RHOHV))
+        """
+        for elevation in self.scans:
+            self.scans[elevation]['DR'] = 10 * np.log10((self.scans[elevation]['ZDR'] + 1 - 2 * np.sqrt(self.scans[elevation]['ZDR']) * self.scans[elevation]['RHOHV']) /
+                                                        (self.scans[elevation]['ZDR'] + 1 + 2 * np.sqrt(self.scans[elevation]['ZDR']) * self.scans[elevation]['RHOHV']))
+
+    def label_biology_using_depolarization_ratio(self, thresh=-12):
+        """
+        Following Kilambi et al. (2018) and labelling as biology anything above a depolarization ratio of -12 seems to
+        work fairly well, so we'll use that, but threshold can be overridden.
+        """
+        for elevation in self.scans:
+            self.scans[elevation]['biology'] = (self.scans[elevation]['DR'] > thresh) * 1
 
     def flatten_scans_to_pointcloud(self):
         """
@@ -468,8 +491,8 @@ class BirdCloud:
     column_order = {
         'SinglePol': ['elevation', 'azimuth', 'range', 'x', 'y', 'z', 'DBZH', 'TH', 'VRADH', 'WRADH', 'TX_power'],
         'DualPol': ['elevation', 'azimuth', 'range', 'x', 'y', 'z', 'DBZH', 'DBZV', 'TH', 'TV', 'VRADH', 'VRADV',
-                    'WRADH', 'WRADV', 'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'ZDR', 'CCORH', 'CCORV', 'CPAH', 'CPAV',
-                    'SQIH', 'SQIV', 'TX_power']
+                    'WRADH', 'WRADV', 'PHIDP', 'PHIDPU', 'RHOHV', 'KDP', 'ZDR', 'DR', 'CCORH', 'CCORV', 'CPAH', 'CPAV',
+                    'SQIH', 'SQIV', 'TX_power', 'biology']
     }
 
 
@@ -479,5 +502,8 @@ if __name__ == '__main__':
     b = BirdCloud()
     b.from_raw_knmi_file('../tests/test_data/RAD_NL62_VOL_NA_201802010000.h5')
     b.to_csv('../RAD_NL62_VOL_NA_201802010000.csv')
+    # b.from_odim_file('../NLHRW_pvol_20190419T2100_6356.h5')
+    # b.to_csv('../NLHRW_pvol_20190419T2100_6356.csv')
+
 
     print('Elapsed time: {}'.format(time.time() - start_time))
