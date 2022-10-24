@@ -427,12 +427,13 @@ class BirdCloud:
         self.pointcloud = self.pointcloud[columns_ordered]
         self.pointcloud.set_index(['elevation', 'azimuth', 'range'], inplace=True)
 
-    def to_csv(self, file_path):
+    def to_csv(self, file_path, compression=None, float_format=None):
         """
         Exports the point cloud to a CSV file.
         :param file_path: path to CSV file. If the file does not exist yet, it will be created.
         """
-        self.pointcloud.to_csv(file_path, na_rep="NaN", quotechar='"', index=False)
+        self.pointcloud.to_csv(file_path, na_rep="NaN", quotechar='"', index=False, compression=compression,
+                               float_format=float_format)
 
     @property
     def elevations(self):
